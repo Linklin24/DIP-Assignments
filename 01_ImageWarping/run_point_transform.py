@@ -1,9 +1,6 @@
 import cv2
 import numpy as np
 import gradio as gr
-from scipy.interpolate import interp2d
-
-from utils import pixels_in_polygon
 
 
 # 初始化全局变量，存储控制点和目标点
@@ -43,108 +40,64 @@ def record_points(evt: gr.SelectData):
     
     return marked_image
 
-# 计算正交补向量
-def orth(vec):
-    return np.array([-vec[1], vec[0]])
-
-# 对网格进行插值得到变换后的图像
-def grid_to_image(image, x, y, grid_x, grid_y):
-    rows, cols = image.shape[0:2]
-    warped_image = np.zeros_like(image)
-    xs, ys = np.meshgrid(x, y)
-
-    nx, ny = len(x), len(y)
-    for i in range(nx-1):
-        for j in range(ny-1):
-            old_quad = np.array([[xs[i, j], ys[i, j]], [xs[i+1, j], ys[i+1, j]],
-                                [xs[i+1, j+1], ys[i+1, j+1]], [xs[i, j+1], ys[i, j+1]]])
-            new_quad = np.array([[grid_x[i, j], grid_y[i, j]], [grid_x[i+1, j], grid_y[i+1, j]],
-                                [grid_x[i+1, j+1], grid_y[i+1, j+1]], [grid_x[i, j+1], grid_y[i, j+1]]])
-            pixels = np.array(pixels_in_polygon(new_quad))
-
-            if (pixels.shape[0] == 0):
-                continue
-
-            px, py = pixels[:, 0], pixels[:, 1]
-            inside_picture = ((px >= 0) & (px < cols) & (py >= 0) & (py < rows))
-            pixels = pixels[inside_picture]
-
-            if (pixels.shape[0] == 0):
-                continue
-
-            new_x_coords, new_y_coords = new_quad[:, 0], new_quad[:, 1]
-            old_x_coords, old_y_coords = old_quad[:, 0], old_quad[:, 1]
-            interpx = interp2d(new_x_coords, new_y_coords, old_x_coords)
-            interpy = interp2d(new_x_coords, new_y_coords, old_y_coords)
-            estimated_old_points = np.array([np.squeeze([interpx(x, y), interpy(x, y)]) for x, y in pixels])
-            nearest_old_pixels = np.round(estimated_old_points).astype(int)
-            nearest_old_pixels[:, 0] = np.clip(nearest_old_pixels[:, 0], 0, cols-1)
-            nearest_old_pixels[:, 1] = np.clip(nearest_old_pixels[:, 1], 0, rows-1)
-
-            old_colors = np.empty((nearest_old_pixels.shape[0], 3))
-
-            valid_x, valid_y = [A.ravel() for A in np.split(nearest_old_pixels, 2, axis=1)]
-            old_colors = image[valid_y, valid_x]
-
-            pixels_idx = tuple(np.array([A.ravel() for A in np.split(pixels, 2, axis=1)][::-1]))
-            warped_image[pixels_idx] = old_colors
-    
-    return warped_image
-
 # 执行仿射变换
-def point_guided_deformation(image, source_pts, target_pts, alpha=1.0, nx=50, ny=50):
+def point_guided_deformation(image, source_pts, target_pts, alpha=1.0, eps=1e-8, nx=900, ny=300):
     """ 
     Return
     ------
         A deformed image.
     """
-    
-    # warped_image = np.array(image)
-    ### FILL: 基于MLS or RBF 实现 image warping
 
     warped_image = np.zeros_like(image)
     rows, cols = image.shape[0:2]
-    p_num = len(target_pts)
-    source_pts = source_pts[0:p_num]
+    n = len(target_pts)  # 控制点对个数
+    source_pts = source_pts[0:n]
 
-    weight = np.zeros(p_num)
+    # 控制点对坐标和实际像素坐标相反
+    source_pts = source_pts[:, ::-1]
+    target_pts = target_pts[:, ::-1]
 
+    # 交换控制点和目标点, 便于后续插值
+    tmp = source_pts
+    source_pts = target_pts
+    target_pts = tmp
+
+    # 生成矩形网格, nx和ny分别为x和y方向上的网格点数量
     xs = np.linspace(0, rows-1, nx)
     ys = np.linspace(0, cols-1, ny)
-    grid_x, grid_y = np.meshgrid(xs, ys)
+    height, width = len(xs), len(ys)
+    x_grid, y_grid = np.meshgrid(xs, ys, indexing='ij')
 
-    for r in range(len(xs)):
-        for c in range(len(ys)):
-            v = np.array([xs[r], ys[c]])
+    # 计算网格点坐标v
+    v = np.stack((x_grid, y_grid), axis=-1) # [height, weight, 2]
 
-            if np.any(np.all(v == source_pts, axis=1)):
-                idx = np.where(np.all(v == source_pts, axis=1))[0]
-                warped_image[target_pts[idx, 1], target_pts[idx, 0]] = image[xs[r], ys[c]]
-                continue
+    # 计算权重w_i
+    weight = 1 / np.linalg.norm(v.reshape(height, width, 1, 2) - source_pts + eps, axis=-1) ** (2 * alpha)  # [height, width, n]
 
-            for i in range(p_num):
-                weight[i] = 1 / np.linalg.norm(v - source_pts[i]) ** (2 * alpha)
+    # 计算p_star和q_star
+    p_star = weight @ source_pts / np.sum(weight, axis=-1, keepdims=True)  # [height, width, 2]
+    q_star = weight @ target_pts / np.sum(weight, axis=-1, keepdims=True)  # [height, width, 2]
 
-            p_star = np.zeros(2)
-            q_star = np.zeros(2)
-            p_star[0] = np.average(source_pts[:, 0], weights=weight)
-            p_star[1] = np.average(source_pts[:, 1], weights=weight)
-            q_star[0] = np.average(target_pts[:, 0], weights=weight)
-            q_star[1] = np.average(target_pts[:, 1], weights=weight)
+    # 计算p_hat和q_hat
+    p_hat = source_pts - p_star.reshape(height, width, 1, 2)  # [height, width, n, 2]
+    q_hat = target_pts - q_star.reshape(height, width, 1, 2)  # [height, width, n, 2]
 
-            p_hat = source_pts - p_star
-            q_hat = target_pts - q_star
+    # 计算矩阵A_i, A_i的元素可以写为[[a11, a12], [-a12, a11]], 因此只需计算a11和a12
+    v_minus_p_star = (v - p_star).reshape(height, width, 1, 2)  # [height, width, 1, 2]
+    a11 = p_hat[..., 0] * v_minus_p_star[..., 0] + p_hat[..., 1] * v_minus_p_star[..., 1]  # [height, width, n]
+    a12 = p_hat[..., 0] * v_minus_p_star[..., 1] - p_hat[..., 1] * v_minus_p_star[..., 0]  # [height, width, n]
+    weight = weight.reshape(height, width, n, 1)  # [height, width, n, 1]
+    mat_A = (weight * np.stack((a11, a12, -a12, a11), axis=-1)).reshape(height, width, n, 2, 2)  # [height, width, n, 2, 2]
 
-            f = np.zeros(2)
-            for i in range(p_num):
-                mat_A = weight[i] * np.vstack((p_hat[i], -orth(p_hat[i]))) @ np.vstack((v-p_star, -orth(v-p_star))).T
-                f += q_hat[i] @ mat_A
-            
-            f = f / np.linalg.norm(f) * np.linalg.norm(v - p_star) + q_star
-            if 0 <= f[0] and f[0] < rows and 0 <= f[1] and f[1] < cols:
-                grid_x[r, c], grid_y[r, c] = f[1], f[0]
+    # 计算f
+    f = np.sum(q_hat.reshape(height, width, n, 1, 2) @ mat_A, axis=(2, 3))  # [height, width, 2]
+    v_minus_p_star = v_minus_p_star.reshape(height, width, 2)  # [height, width, 2]
+    f = np.linalg.norm(v_minus_p_star, axis=-1, keepdims=True) * f / np.linalg.norm(f, axis=-1, keepdims=True) + q_star  # [height, width, 2]
 
-    warped_image = grid_to_image(image, xs, ys, grid_x, grid_y)
+    # 对f插值得到最终结果
+    f = np.float32(f)
+    warped_image = cv2.remap(image, f[..., 1], f[..., 0], cv2.INTER_LINEAR)
+    warped_image = cv2.resize(warped_image, (cols, rows))
 
     return warped_image
 

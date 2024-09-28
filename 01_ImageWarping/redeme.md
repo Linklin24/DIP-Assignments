@@ -1,4 +1,4 @@
-## Implementation of Image Geometric Transformation
+# Implementation of Image Geometric Transformation
 
 This repository is Yulin Chen's implementation of Assignment_01 of DIP. 
 
