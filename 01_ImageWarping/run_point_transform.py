@@ -41,12 +41,17 @@ def record_points(evt: gr.SelectData):
     return marked_image
 
 # 执行仿射变换
-def point_guided_deformation(image, source_pts, target_pts, alpha=1.0, eps=1e-8, nx=900, ny=300):
+def point_guided_deformation(image, source_pts, target_pts, alpha=1.0, eps=1e-8, nx=300, ny=300):
     """ 
     Return
     ------
         A deformed image.
     """
+
+    # warped_image = np.array(image)
+    ### FILL: 基于MLS or RBF 实现 image warping
+
+    # 实现的算法为基于MLS的刚性变换算法
 
     warped_image = np.zeros_like(image)
     rows, cols = image.shape[0:2]
@@ -71,14 +76,11 @@ def point_guided_deformation(image, source_pts, target_pts, alpha=1.0, eps=1e-8,
     # 计算网格点坐标v
     v = np.stack((x_grid, y_grid), axis=-1) # [height, weight, 2]
 
-    # 计算权重w_i
     weight = 1 / np.linalg.norm(v.reshape(height, width, 1, 2) - source_pts + eps, axis=-1) ** (2 * alpha)  # [height, width, n]
 
-    # 计算p_star和q_star
     p_star = weight @ source_pts / np.sum(weight, axis=-1, keepdims=True)  # [height, width, 2]
     q_star = weight @ target_pts / np.sum(weight, axis=-1, keepdims=True)  # [height, width, 2]
 
-    # 计算p_hat和q_hat
     p_hat = source_pts - p_star.reshape(height, width, 1, 2)  # [height, width, n, 2]
     q_hat = target_pts - q_star.reshape(height, width, 1, 2)  # [height, width, n, 2]
 
@@ -89,7 +91,6 @@ def point_guided_deformation(image, source_pts, target_pts, alpha=1.0, eps=1e-8,
     weight = weight.reshape(height, width, n, 1)  # [height, width, n, 1]
     mat_A = (weight * np.stack((a11, a12, -a12, a11), axis=-1)).reshape(height, width, n, 2, 2)  # [height, width, n, 2, 2]
 
-    # 计算f
     f = np.sum(q_hat.reshape(height, width, n, 1, 2) @ mat_A, axis=(2, 3))  # [height, width, 2]
     v_minus_p_star = v_minus_p_star.reshape(height, width, 2)  # [height, width, 2]
     f = np.linalg.norm(v_minus_p_star, axis=-1, keepdims=True) * f / np.linalg.norm(f, axis=-1, keepdims=True) + q_star  # [height, width, 2]
