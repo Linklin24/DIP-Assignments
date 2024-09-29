@@ -53,12 +53,22 @@ def point_guided_deformation(image, source_pts, target_pts, alpha=1.0, eps=1e-8,
 
     # 实现的算法为基于MLS的刚性变换算法
 
-    warped_image = np.zeros_like(image)
-    rows, cols = image.shape[0:2]
     n = len(target_pts)  # 控制点对个数
     source_pts = source_pts[0:n]
+    rows, cols = image.shape[0:2]
+    warped_image = np.zeros_like(image)
 
-    # 控制点对坐标和实际像素坐标相反
+    # n为0或1时单独处理
+    if n == 0:
+        return image
+    # 当n = 1时, mu_r = 0, 不能直接使用公式计算变换
+    if n == 1:
+        T = target_pts[0] - source_pts[0]
+        m_trans = np.array([[1, 0, T[0]], [0, 1, T[1]]], dtype=np.float32)
+        warped_image = cv2.warpAffine(image, m_trans, (cols, rows))
+        return warped_image
+    
+    # 控制点对坐标和实际像素坐标相反, 将(x, y)调整为(y, x)
     source_pts = source_pts[:, ::-1]
     target_pts = target_pts[:, ::-1]
 
@@ -76,7 +86,7 @@ def point_guided_deformation(image, source_pts, target_pts, alpha=1.0, eps=1e-8,
     # 计算网格点坐标v
     v = np.stack((x_grid, y_grid), axis=-1) # [height, weight, 2]
 
-    weight = 1 / np.linalg.norm(v.reshape(height, width, 1, 2) - source_pts + eps, axis=-1) ** (2 * alpha)  # [height, width, n]
+    weight = 1 / (np.linalg.norm(v.reshape(height, width, 1, 2) - source_pts, axis=-1) ** (2 * alpha) + eps)  # [height, width, n]
 
     p_star = weight @ source_pts / np.sum(weight, axis=-1, keepdims=True)  # [height, width, 2]
     q_star = weight @ target_pts / np.sum(weight, axis=-1, keepdims=True)  # [height, width, 2]
@@ -93,7 +103,7 @@ def point_guided_deformation(image, source_pts, target_pts, alpha=1.0, eps=1e-8,
 
     f = np.sum(q_hat.reshape(height, width, n, 1, 2) @ mat_A, axis=(2, 3))  # [height, width, 2]
     v_minus_p_star = v_minus_p_star.reshape(height, width, 2)  # [height, width, 2]
-    f = np.linalg.norm(v_minus_p_star, axis=-1, keepdims=True) * f / np.linalg.norm(f, axis=-1, keepdims=True) + q_star  # [height, width, 2]
+    f = np.linalg.norm(v_minus_p_star, axis=-1, keepdims=True) * f / (np.linalg.norm(f, axis=-1, keepdims=True) + eps) + q_star  # [height, width, 2]
 
     # 对f插值得到最终结果
     f = np.float32(f)
