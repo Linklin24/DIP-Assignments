@@ -1,0 +1,8 @@
+checkpoints/
+datasets/
+eval_results/
+train_list/
+train_results/
+val_list/
+val_results/
+wandb/
