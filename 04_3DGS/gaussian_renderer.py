@@ -49,12 +49,32 @@ class GaussianRenderer(nn.Module):
         ### FILL:
         ### J_proj = ...
         
+        focal_x = K[0, 0]
+        focal_y = K[1, 1]
+        tan_fovx = self.W / (2 * K[0, 0])
+        tan_fovy = self.H / (2 * K[1, 1])
+
+        tx = (cam_points[:, 0] / cam_points[:, 2]).clip(min=-tan_fovx*1.3, max=tan_fovx*1.3) * cam_points[:, 2]
+        ty = (cam_points[:, 1] / cam_points[:, 2]).clip(min=-tan_fovy*1.3, max=tan_fovy*1.3) * cam_points[:, 2]
+        tz = cam_points[:, 2]
+
+        J_proj[:, 0, 0] = 1 / tz * focal_x
+        J_proj[:, 1, 1] = 1 / tz * focal_y
+        J_proj[:, 0, 2] = -tx / (tz * tz) * focal_x
+        J_proj[:, 1, 2] = -ty / (tz * tz) * focal_y
+        
         # Transform covariance to camera space
         ### FILL: Aplly world to camera rotation to the 3d covariance matrix
         ### covs_cam = ...  # (N, 3, 3)
+
+        R = R.unsqueeze(0)
+        covs_cam = R @ covs3d @ R.permute(0, 2, 1)
         
         # Project to 2D
-        covs2D = torch.bmm(J_proj, torch.bmm(covs_cam, J_proj.permute(0, 2, 1)))  # (N, 2, 2)
+        covs2D = J_proj @ covs_cam @ J_proj.permute(0, 2, 1)  # (N, 2, 2)
+
+        # filter = torch.eye(2,2).to(covs2D) * 0.3
+        # covs2D = covs2D + filter[None]
         
         return means2D, covs2D, depths
 
@@ -77,6 +97,13 @@ class GaussianRenderer(nn.Module):
         # Compute determinant for normalization
         ### FILL: compute the gaussian values
         ### gaussian = ... ## (N, H, W)
+
+        inv_covs2D = torch.linalg.inv(covs2D).reshape(N, 1, 1, 2, 2)
+        det_covs2D = torch.sqrt(torch.linalg.det(covs2D))
+        gaussian = -0.5 * dx.reshape(N, H, W, 1, 2) @ inv_covs2D @ dx.reshape(N, H, W, 2, 1)
+        
+        # gaussian = torch.exp(gaussian.squeeze())
+        gaussian = torch.exp(gaussian.squeeze()) / (2 * np.pi * det_covs2D.reshape(N, 1, 1))
     
         return gaussian
 
@@ -120,6 +147,10 @@ class GaussianRenderer(nn.Module):
         # 7. Compute weights
         ### FILL:
         ### weights = ... # (N, H, W)
+
+        Ts = torch.cat([torch.ones_like(alphas[:1, ...]), 1-alphas[:-1, ...]], dim=0).cumprod(dim=0)
+        weights = alphas * Ts
+        # weights = alphas
         
         # 8. Final rendering
         rendered = (weights.unsqueeze(-1) * colors).sum(dim=0)  # (H, W, 3)

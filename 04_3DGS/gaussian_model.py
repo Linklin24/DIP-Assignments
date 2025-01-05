@@ -112,6 +112,9 @@ class GaussianModel(nn.Module):
         # Compute covariance
         ### FILL:
         ### Covs3d = ...
+
+        Covs3d = torch.bmm(R, S)
+        Covs3d = torch.bmm(Covs3d, Covs3d.permute(0, 2, 1))
         
         return Covs3d
 

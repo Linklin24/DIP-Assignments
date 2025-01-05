@@ -126,10 +126,10 @@ class ColmapDataset(Dataset):
         self.points3D_xyz = torch.as_tensor(np.array([p['xyz'] for p in points3D.values()])).float()
         self.points3D_rgb = torch.as_tensor(np.array([p['rgb'] for p in points3D.values()])).float()
 
-        # ### sample 3D points to a specific number
-        # indices = sample_farthest_points(self.points3D_xyz.unsqueeze(0), K = maximum_pts_num)[1]
-        # self.points3D_xyz = self.points3D_xyz[indices.reshape(-1)]
-        # self.points3D_rgb = self.points3D_rgb[indices.reshape(-1)]
+        ### sample 3D points to a specific number
+        indices = sample_farthest_points(self.points3D_xyz.unsqueeze(0), K = maximum_pts_num)[1]
+        self.points3D_xyz = self.points3D_xyz[indices.reshape(-1)]
+        self.points3D_rgb = self.points3D_rgb[indices.reshape(-1)]
         
         # Get image paths and convert camera parameters
         self.image_paths = []
